@@ -54,9 +54,11 @@ class Task:
         self.completed = True
 
     def change_description(self, description: str) -> None:
+        """Rename the task."""
         self.description = description
 
     def update_duration(self, duration: int) -> None:
+        """Change how long the task takes, in minutes."""
         self.duration = duration
 
 
@@ -85,6 +87,7 @@ class Pet:
         self.tasks.append(task)
 
     def remove_task(self, task: Task) -> None:
+        """Detach a task from this pet."""
         if task in self.tasks:
             self.tasks.remove(task)
             task.pet_assigned = None
@@ -94,33 +97,42 @@ class Pet:
         return sorted(self.tasks, key=lambda t: t.scheduled_time)
 
     def pending_tasks(self) -> list[Task]:
+        """Return this pet's not-yet-completed tasks, sorted by due time."""
         return [t for t in self.list_tasks() if not t.completed]
 
     # --- activity logging ------------------------------------------------
     def log_meal(self, note: str = "") -> None:
+        """Record that the pet was fed."""
         self.meal_log.append(note or "meal")
 
     def log_exercise(self, note: str = "") -> None:
+        """Record an exercise / playtime session."""
         self.exercise_log.append(note or "exercise")
 
     def log_medicine(self, note: str = "") -> None:
+        """Record that medicine was administered."""
         self.medicine_log.append(note or "medicine")
 
     # --- attribute updates ----------------------------------------------
     def update_name(self, name: str) -> None:
+        """Rename the pet."""
         self.name = name
 
     def add_medicine(self, medicine: str) -> None:
+        """Add a medicine to the pet's list."""
         self.medicines.append(medicine)
 
     def remove_medicine(self, medicine: str) -> None:
+        """Remove a medicine from the pet's list."""
         if medicine in self.medicines:
             self.medicines.remove(medicine)
 
     def update_diet(self, diet: str) -> None:
+        """Change the pet's diet."""
         self.diet = diet
 
     def update_energy_level(self, level: str) -> None:
+        """Update the pet's energy level (high / medium / low)."""
         self.energy_level = level
 
 
@@ -128,22 +140,27 @@ class Owner:
     """A pet owner: identifying info, their pets, and an end-of-day cutoff."""
 
     def __init__(self, first: str, last: str, end_of_day: time) -> None:
+        """Create an owner with a name and an end-of-day scheduling cutoff."""
         self.first = first
         self.last = last
         self.end_of_day = end_of_day        # no task may be scheduled past this time
         self.pet_list: list[Pet] = []
 
     def add_pet(self, pet: Pet) -> None:
+        """Add a pet to this owner's list."""
         self.pet_list.append(pet)
 
     def remove_pet(self, pet: Pet) -> None:
+        """Remove a pet from this owner's list."""
         if pet in self.pet_list:
             self.pet_list.remove(pet)
 
     def update_first(self, first: str) -> None:
+        """Update the owner's first name."""
         self.first = first
 
     def update_last(self, last: str) -> None:
+        """Update the owner's last name."""
         self.last = last
 
     def all_tasks(self) -> list[Task]:
@@ -160,6 +177,7 @@ class Scheduler:
     """
 
     def __init__(self, owner: Owner) -> None:
+        """Create a scheduler bound to one owner (and all their pets)."""
         self.owner = owner
         self.daily_schedule: dict[time, Task] = {}   # start time -> Task
         self.skipped: list[Task] = []                # skippable tasks dropped
@@ -323,12 +341,14 @@ class Scheduler:
         return occurrences
 
     def _record_skipped(self, task: Task) -> None:
+        """Log a skippable task that was dropped because it lost its slot."""
         self.skipped.append(task)
         print(f"[skipped] '{task.description}' for "
               f"{task.pet_assigned.name if task.pet_assigned else '?'} "
               f"(skippable, lost its slot)")
 
     def _record_unplaced(self, task: Task, reason: str) -> None:
+        """Log a task that could not be scheduled at all."""
         self.unplaced.append(task)
         print(f"[UNPLACED] '{task.description}' for "
               f"{task.pet_assigned.name if task.pet_assigned else '?'} ({reason})")
