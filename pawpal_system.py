@@ -3,8 +3,10 @@
 Class structure generated from the UML design in diagrams/uml_draft.mmd.
 
 Design notes / resolved issues:
-  * A Task is a single occurrence with one due time (frequency removed);
-    recurring activities are modeled as multiple Task instances.
+  * A Task carries a frequency (times per day); the Scheduler expands each
+    task into that many concrete occurrences spread across the day, so the
+    frequency field drives the schedule instead of contradicting the single
+    scheduled_time.
   * Pet owns its Tasks (add/list/manage); Task.pet_assigned is set on add,
     so a Task can never reference a pet the owner does not have.
   * Scheduler manages tasks across ALL of an owner's pets, treating the
@@ -18,7 +20,7 @@ Design notes / resolved issues:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, time, timedelta
 from typing import Optional
 
@@ -39,8 +41,9 @@ class Task:
     """A single scheduled activity for a pet (feeding, walk, medicine, ...)."""
 
     description: str
-    scheduled_time: time            # due time
+    scheduled_time: time            # due time (of the first occurrence)
     duration: int = 0               # minutes
+    frequency: int = 1              # times per day (Scheduler expands into occurrences)
     skippable: bool = False         # True if it can be dropped for the day (a walk)
     priority: str = "medium"        # high / medium / low
     completed: bool = False         # completion status
@@ -172,13 +175,16 @@ class Scheduler:
         self.skipped.clear()
         self.unplaced.clear()
 
-        # High-priority tasks claim their preferred slot before lower ones.
-        tasks = sorted(
-            self.owner.all_tasks(),
+        # Expand each task into its per-day occurrences, then place the
+        # highest-priority ones first so they claim their preferred slots.
+        occurrences: list[Task] = []
+        for task in self.owner.all_tasks():
+            occurrences.extend(self._expand_occurrences(task, self.owner.end_of_day))
+        occurrences.sort(
             key=lambda t: (-PRIORITY_RANK.get(t.priority, 0), t.scheduled_time),
         )
-        for task in tasks:
-            self.add_task(task, self.owner.end_of_day)
+        for occ in occurrences:
+            self.add_task(occ, self.owner.end_of_day)
         return self.daily_schedule
 
     def get_schedule(self) -> list[Task]:
@@ -287,6 +293,35 @@ class Scheduler:
             return None
         return new_dt.time()
 
+    def _expand_occurrences(self, task: Task, end_of_day: time) -> list[Task]:
+        """Turn one task into ``frequency`` concrete occurrences for the day.
+
+        Occurrences are copies (the pet keeps the original as its declared
+        intent), spread evenly across the window from the task's start time to
+        end_of_day. A frequency of 1 (or no room to spread) yields a single
+        copy at the original time.
+        """
+        freq = max(task.frequency, 1)
+        if freq == 1:
+            return [replace(task)]
+
+        start = _as_dt(task.scheduled_time)
+        window_minutes = (_as_dt(end_of_day) - start).total_seconds() / 60.0
+        if window_minutes <= 0:
+            return [replace(task)]
+
+        step = window_minutes / freq
+        occurrences = []
+        for i in range(freq):
+            slot = (start + timedelta(minutes=step * i)).time()
+            occurrences.append(replace(
+                task,
+                scheduled_time=slot,
+                frequency=1,
+                description=f"{task.description} ({i + 1}/{freq})",
+            ))
+        return occurrences
+
     def _record_skipped(self, task: Task) -> None:
         self.skipped.append(task)
         print(f"[skipped] '{task.description}' for "
@@ -308,8 +343,9 @@ if __name__ == "__main__":
     owner.add_pet(rex)
     owner.add_pet(milo)
 
-    # Both breakfast feedings want 07:00 (high, non-skippable) -> one gets nudged.
-    rex.add_task(Task("Breakfast", time(7, 0), duration=15, priority="high"))
+    # Feed Rex twice a day -> Scheduler spreads the two occurrences out.
+    rex.add_task(Task("Feeding", time(7, 0), duration=15, frequency=2, priority="high"))
+    # Milo also wants breakfast at 07:00 -> cross-pet conflict, gets nudged.
     milo.add_task(Task("Breakfast", time(7, 0), duration=10, priority="high"))
     # A walk also wants 07:00 but is skippable -> it loses and is dropped.
     rex.add_task(Task("Morning walk", time(7, 0), duration=30,
