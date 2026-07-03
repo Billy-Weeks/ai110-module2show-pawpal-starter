@@ -1,53 +1,69 @@
 classDiagram
     class Pet {
         +String name
-        +String type
+        +String pet_type
         +String breed
         +int age
         +String diet
+        +String energy_level
         +List~String~ medicines
-        +String energyLevel
-        +logMeal()
-        +logExercise()
-        +logMedicine()
-        +updateName(String name)
-        +addMedicine(String medicine)
-        +removeMedicine(String medicine)
-        +updateDiet(String diet)
-        +updateEnergyLevel(String level)
+        +List~Task~ tasks
+        +List~String~ meal_log
+        +List~String~ exercise_log
+        +List~String~ medicine_log
+        +add_task(Task task)
+        +remove_task(Task task)
+        +list_tasks() List~Task~
+        +pending_tasks() List~Task~
+        +log_meal(String note)
+        +log_exercise(String note)
+        +log_medicine(String note)
+        +update_name(String name)
+        +add_medicine(String medicine)
+        +remove_medicine(String medicine)
+        +update_diet(String diet)
+        +update_energy_level(String level)
     }
 
     class Owner {
         +String first
         +String last
-        +List~Pet~ petList
-        +Time endOfDay
-        +addPet(Pet pet)
-        +removePet(Pet pet)
-        +updateFirst(String first)
-        +updateLast(String last)
+        +Time end_of_day
+        +List~Pet~ pet_list
+        +add_pet(Pet pet)
+        +remove_pet(Pet pet)
+        +update_first(String first)
+        +update_last(String last)
+        +all_tasks() List~Task~
     }
 
     class Task {
-        +String name
-        +Pet petAssigned
+        +String description
+        +Time scheduled_time
         +int duration
-        +int frequency
         +bool skippable
         +String priority
-        +Time scheduledTime
         +bool completed
-        +changeName(String name)
-        +updateDuration(int duration)
+        +Pet pet_assigned
+        +mark_complete()
+        +change_description(String description)
+        +update_duration(int duration)
     }
 
     class Scheduler {
-        +Map~Time, Task~ dailySchedule
-        +conflictCheck(Task task) Task
-        +resolveConflict(Task newTask, Task existing) Task
-        +addTask(Task task, Time endOfDay) bool
+        +Owner owner
+        +Map~Time, Task~ daily_schedule
+        +List~Task~ skipped
+        +List~Task~ unplaced
+        +build_daily_schedule() Map~Time, Task~
+        +get_schedule() List~Task~
+        +tasks_for_pet(Pet pet) List~Task~
+        +conflict_check(Task task) Task
+        +resolve_conflict(Task new_task, Task existing) Task
+        +add_task(Task task, Time end_of_day) bool
     }
 
     Owner "1" o-- "*" Pet : owns
+    Pet "1" o-- "*" Task : has
     Task "*" --> "1" Pet : assigned to
-    Scheduler "1" o-- "*" Task : schedules
+    Scheduler "1" --> "1" Owner : manages tasks for
