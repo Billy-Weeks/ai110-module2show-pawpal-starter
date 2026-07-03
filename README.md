@@ -49,15 +49,15 @@ Paste a sample of your app's CLI or Streamlit output here so a reader can see wh
 ```
 Today's Schedule for Sally Weeks:
 ----------------------------------------
-  07:00  Dino  Breakfast
-  07:30  Rex   Breakfast
-  08:00  Kiwi  Refill seeds
-  09:00  Rex   Morning walk
-  12:00  Dino  Litter box
-  13:00  Kiwi  Clean cage
-  17:00  Dino  Play with feather toy
-  18:00  Rex   Evening walk
-  19:30  Kiwi  Cover cage for night
+  07:00  Dino            Breakfast
+  07:30  Butterscotch    Breakfast
+  08:00  Kiwi            Refill seeds
+  09:00  Butterscotch    Morning walk
+  12:00  Dino            Litter box
+  13:00  Kiwi            Clean cage
+  17:00  Dino            Play with feather toy
+  18:00  Butterscotch    Evening walk
+  19:30  Kiwi            Cover cage for night
   ```
 
 
