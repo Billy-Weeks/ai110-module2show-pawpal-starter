@@ -1,0 +1,53 @@
+classDiagram
+    class Pet {
+        +String name
+        +String type
+        +String breed
+        +int age
+        +String diet
+        +List~String~ medicines
+        +String energyLevel
+        +logMeal()
+        +logExercise()
+        +logMedicine()
+        +updateName(String name)
+        +addMedicine(String medicine)
+        +removeMedicine(String medicine)
+        +updateDiet(String diet)
+        +updateEnergyLevel(String level)
+    }
+
+    class Owner {
+        +String first
+        +String last
+        +List~Pet~ petList
+        +Time endOfDay
+        +addPet(Pet pet)
+        +removePet(Pet pet)
+        +updateFirst(String first)
+        +updateLast(String last)
+    }
+
+    class Task {
+        +String name
+        +Pet petAssigned
+        +int duration
+        +int frequency
+        +bool skippable
+        +String priority
+        +Time scheduledTime
+        +bool completed
+        +changeName(String name)
+        +updateDuration(int duration)
+    }
+
+    class Scheduler {
+        +Map~Time, Task~ dailySchedule
+        +conflictCheck(Task task) Task
+        +resolveConflict(Task newTask, Task existing) Task
+        +addTask(Task task, Time endOfDay) bool
+    }
+
+    Owner "1" o-- "*" Pet : owns
+    Task "*" --> "1" Pet : assigned to
+    Scheduler "1" o-- "*" Task : schedules
