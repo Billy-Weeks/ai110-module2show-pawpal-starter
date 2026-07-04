@@ -314,12 +314,29 @@ class Scheduler:
         """
         return (task.skippable, -task.rank, task.scheduled_time)
 
-    def conflict_check(self, task: Task) -> Optional[Task]:
-        """Return an already-scheduled task whose interval overlaps ``task``,
-        or None if the slot range is free.
+    def find_conflicts(
+        self, task: Task, among: Optional[list[Task]] = None
+    ) -> list[Task]:
+        """Every task in ``among`` whose time interval overlaps ``task``'s.
+
+        ``among`` defaults to the tasks already placed on the schedule (used
+        while building it). Pass a list -- e.g. ``owner.all_tasks()`` -- to
+        check a task against existing tasks *before* scheduling, which is how
+        the UI warns about a clash at add time. ``task`` itself is never
+        counted, so it is safe to call before or after adding it.
         """
-        overlaps = self._overlapping(task)
-        return overlaps[0] if overlaps else None
+        among = self.placed if among is None else among
+        start = _as_dt(task.scheduled_time)
+        end = start + timedelta(minutes=max(task.duration, 0))
+        hits = []
+        for other in among:
+            if other is task:
+                continue
+            o_start = _as_dt(other.scheduled_time)
+            o_end = o_start + timedelta(minutes=max(other.duration, 0))
+            if o_start < end and start < o_end:      # intervals overlap
+                hits.append(other)
+        return hits
 
     def add_task(self, task: Task, end_of_day: time) -> bool:
         """Place ``task`` on the timeline.
@@ -333,7 +350,7 @@ class Scheduler:
             return False
 
         # Requested slot is free -> place it as-is.
-        conflicts = self._overlapping(task)
+        conflicts = self.find_conflicts(task)
         if not conflicts:
             self._insert(task)
             return True
@@ -384,41 +401,13 @@ class Scheduler:
         return candidate.time()
 
     # --- sorted-list bookkeeping ----------------------------------------
-    def _overlapping(self, task: Task) -> list[Task]:
-        """Every placed task whose interval overlaps ``task``'s interval.
-
-        Because ``placed`` is sorted and non-overlapping, only the neighbour
-        just before the insertion point and the run of tasks starting before
-        ``task`` ends can overlap -- found via a bisect rather than a full scan.
-        """
-        start = _as_dt(task.scheduled_time)
-        end = start + timedelta(minutes=max(task.duration, 0))
-        i = bisect.bisect_left(
-            self.placed, task.scheduled_time, key=lambda t: t.scheduled_time
-        )
-
-        overlaps: list[Task] = []
-        # Left neighbour: only it can reach across the insertion point.
-        if i > 0:
-            left = self.placed[i - 1]
-            left_end = _as_dt(left.scheduled_time) + timedelta(
-                minutes=max(left.duration, 0)
-            )
-            if left_end > start:
-                overlaps.append(left)
-        # Rightward run: every task that starts before ``task`` ends overlaps.
-        k = i
-        while k < len(self.placed):
-            right = self.placed[k]
-            if _as_dt(right.scheduled_time) < end:
-                overlaps.append(right)
-                k += 1
-            else:
-                break
-        return overlaps
-
     def _insert(self, task: Task) -> None:
-        """Insert ``task`` into the sorted ``placed`` list at its start time."""
+        """Insert ``task`` into ``placed`` at its start time, keeping the list
+        sorted (binary-search insertion).
+
+        The sort order is what lets ``_earliest_free_slot`` sweep the timeline
+        in a single left-to-right pass, so this invariant is load-bearing.
+        """
         i = bisect.bisect_left(
             self.placed, task.scheduled_time, key=lambda t: t.scheduled_time
         )

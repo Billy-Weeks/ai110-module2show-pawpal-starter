@@ -94,7 +94,7 @@ else:
 
     # Real method call: build a Task and add it to the chosen Pet.
     if st.button("Add task"):
-        pet.add_task(Task(
+        new_task = Task(
             task_title,
             task_time,
             duration=int(duration),
@@ -102,8 +102,24 @@ else:
             skippable=skippable,
             priority=priority,
             recurrence=recurrence,
-        ))
+        )
+
+        # Warn right away if this overlaps a task already on the owner's
+        # timeline. Checked before adding, so it isn't compared to itself;
+        # the task is still added and the Scheduler resolves it later.
+        clashes = Scheduler(owner).find_conflicts(new_task, owner.all_tasks())
+        pet.add_task(new_task)
         st.success(f"Added '{task_title}' to {pet.name}.")
+        if clashes:
+            first = clashes[0]
+            extra = f" (and {len(clashes) - 1} more)" if len(clashes) > 1 else ""
+            other_pet = first.pet_assigned.name if first.pet_assigned else "?"
+            st.warning(
+                f"⚠️ '{new_task.description}' at {task_time.strftime('%H:%M')} "
+                f"overlaps '{first.description}' ({other_pet}) at "
+                f"{first.scheduled_time.strftime('%H:%M')}{extra}. "
+                "It will be nudged to a free slot when you generate the schedule."
+            )
 
 # Show every task added so far, across all pets -- with sort/filter controls.
 all_tasks = owner.all_tasks()
