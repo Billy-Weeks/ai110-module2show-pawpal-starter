@@ -79,13 +79,24 @@ After building the skeleton of classes, Claude noticed that Task pointed to Pet 
 **a. Constraints and priorities**
 
 - What constraints does your scheduler consider (for example: time, priority, preferences)?
+
+The scheduler considers time and priority, however there is no implementation for preferences.
 - How did you decide which constraints mattered most?
+
+Due to how priority is implemented, it is given the most weight so that when there is a conflict, the highest priority will always win. 
+
+The logic behind this is that tasks such as feeding, medicine that needs to be taken at a certain time, etc. should be given precendence over walking, exercise, playtime. While those are important, not eating is detrimental to pets. 
 
 **b. Tradeoffs**
 
 - Describe one tradeoff your scheduler makes.
+
+The tradeoff: Priority over punctuality.
+When two tasks want the same slot, the scheduler favors priority over keeping the request time. The higher priority task keeps its requested slot and the lower priority is either dropped if designated as skippable or nudged to the next free time slot.
+
 - Why is that tradeoff reasonable for this scenario?
 
+This is reasonable because it allows those important tasks to not be ignored while allowing tasks that can be pushed to a later time (i.e. going for a walk) moved to a conflict-free time. This also gives control to the Owner to dictate those tasks which have to happen when they are requested by setting the priority and then allowing those tasks that would be great if we do them (puppy play park) but it's okay if we don't do them today (skippable).
 ---
 
 ## 3. AI Collaboration
@@ -98,8 +109,6 @@ After building the skeleton of classes, Claude noticed that Task pointed to Pet 
 **b. Judgment and verification**
 
 - Describe one moment where you did not accept an AI suggestion as-is.
-- How did you evaluate or verify what the AI suggested?
-
 ---
 
 ## 4. Testing and Verification
