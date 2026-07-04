@@ -13,15 +13,20 @@ Design notes / resolved issues:
     schedule as the owner's single timeline (one person, one thing at a time).
   * Conflicts are detected by time-interval OVERLAP (using duration), not just
     exact start time.
-  * Times use datetime math with a midnight/end-of-day guard so the recursive
-    nudge cannot push a task past the owner's cutoff or roll past midnight.
+  * Placed tasks are kept in a single start-time-sorted list, so conflict
+    detection and finding a task's next free slot are each a single ordered
+    pass (helped by bisect) instead of rescanning the whole schedule.
+  * A displaced task is moved to the earliest free gap after the winner in one
+    sweep (bounded by the owner's cutoff), instead of hopping past one task at
+    a time and re-checking.
   * Dropped/unplaced tasks are logged (surfaced) instead of silently lost.
 """
 
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass, field, replace
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Optional
 
 # Reference date used only for time arithmetic (add_task never needs "today").
@@ -29,6 +34,10 @@ _REF_DATE = datetime.min.date()
 
 # Higher number = higher priority. Unknown labels rank lowest (0).
 PRIORITY_RANK = {"high": 3, "medium": 2, "low": 1}
+
+# Recurrence intervals: completing one of these spawns the next occurrence.
+# Anything not listed here (e.g. "none") is treated as non-recurring.
+RECURRENCE_STEP = {"daily": timedelta(days=1), "weekly": timedelta(weeks=1)}
 
 
 def _as_dt(t: time) -> datetime:
@@ -46,12 +55,38 @@ class Task:
     frequency: int = 1              # times per day (Scheduler expands into occurrences)
     skippable: bool = False         # True if it can be dropped for the day (a walk)
     priority: str = "medium"        # high / medium / low
+    recurrence: str = "none"        # none / daily / weekly (regenerates on completion)
+    due_date: Optional[date] = None  # calendar day this occurrence is for (None = undated)
     completed: bool = False         # completion status
     pet_assigned: Optional["Pet"] = None  # set by Pet.add_task
 
-    def mark_complete(self) -> None:
-        """Mark this task as done."""
+    def mark_complete(self) -> Optional["Task"]:
+        """Mark this task done.
+
+        If it recurs (daily/weekly), spawn and return the next occurrence
+        (attached to the same pet); otherwise return None. Note ``frequency``
+        (times per day) and ``recurrence`` (which day it repeats on) are
+        independent: frequency drives same-day occurrences, recurrence rolls the
+        task forward to a future day.
+        """
         self.completed = True
+        return self.spawn_next_occurrence()
+
+    def spawn_next_occurrence(self) -> Optional["Task"]:
+        """Create the next occurrence of a recurring task, advancing its due
+        date by one interval. Returns None for non-recurring tasks.
+
+        The copy starts uncompleted and, if this task belongs to a pet, is added
+        back to that pet automatically. An undated task anchors off today.
+        """
+        step = RECURRENCE_STEP.get(self.recurrence)
+        if step is None:
+            return None
+        base = self.due_date if self.due_date is not None else date.today()
+        nxt = replace(self, completed=False, due_date=base + step, pet_assigned=None)
+        if self.pet_assigned is not None:
+            self.pet_assigned.add_task(nxt)
+        return nxt
 
     def change_description(self, description: str) -> None:
         """Rename the task."""
@@ -60,6 +95,11 @@ class Task:
     def update_duration(self, duration: int) -> None:
         """Change how long the task takes, in minutes."""
         self.duration = duration
+
+    @property
+    def rank(self) -> int:
+        """Numeric priority (higher = more important); unknown labels -> 0."""
+        return PRIORITY_RANK.get(self.priority, 0)
 
 
 @dataclass
@@ -88,9 +128,11 @@ class Pet:
 
     def remove_task(self, task: Task) -> None:
         """Detach a task from this pet."""
-        if task in self.tasks:
+        try:
             self.tasks.remove(task)
-            task.pet_assigned = None
+        except ValueError:
+            return
+        task.pet_assigned = None
 
     def list_tasks(self) -> list[Task]:
         """Return this pet's tasks sorted by due time."""
@@ -98,7 +140,8 @@ class Pet:
 
     def pending_tasks(self) -> list[Task]:
         """Return this pet's not-yet-completed tasks, sorted by due time."""
-        return [t for t in self.list_tasks() if not t.completed]
+        pending = (t for t in self.tasks if not t.completed)
+        return sorted(pending, key=lambda t: t.scheduled_time)
 
     # --- activity logging ------------------------------------------------
     def log_meal(self, note: str = "") -> None:
@@ -124,8 +167,10 @@ class Pet:
 
     def remove_medicine(self, medicine: str) -> None:
         """Remove a medicine from the pet's list."""
-        if medicine in self.medicines:
+        try:
             self.medicines.remove(medicine)
+        except ValueError:
+            pass
 
     def update_diet(self, diet: str) -> None:
         """Change the pet's diet."""
@@ -152,8 +197,10 @@ class Owner:
 
     def remove_pet(self, pet: Pet) -> None:
         """Remove a pet from this owner's list."""
-        if pet in self.pet_list:
+        try:
             self.pet_list.remove(pet)
+        except ValueError:
+            pass
 
     def update_first(self, first: str) -> None:
         """Update the owner's first name."""
@@ -179,145 +226,212 @@ class Scheduler:
     def __init__(self, owner: Owner) -> None:
         """Create a scheduler bound to one owner (and all their pets)."""
         self.owner = owner
-        self.daily_schedule: dict[time, Task] = {}   # start time -> Task
+        # Placed tasks, kept sorted by start time and always non-overlapping.
+        self.placed: list[Task] = []
         self.skipped: list[Task] = []                # skippable tasks dropped
         self.unplaced: list[Task] = []               # tasks that couldn't fit
+        self.conflicts: list[str] = []               # human-readable conflict warnings
 
     # --- public entry point ---------------------------------------------
-    def build_daily_schedule(self) -> dict[time, Task]:
+    def build_daily_schedule(self) -> list[Task]:
         """Gather tasks from every pet and place them, highest priority first.
 
-        Returns the resulting {time: Task} schedule.
+        Returns the resulting timeline as a start-time-sorted list of tasks.
         """
-        self.daily_schedule.clear()
+        self.placed.clear()
         self.skipped.clear()
         self.unplaced.clear()
+        self.conflicts.clear()
 
-        # Expand each task into its per-day occurrences, then place the
-        # highest-priority ones first so they claim their preferred slots.
+        # Expand each task into its per-day occurrences, then place them in
+        # precedence order (see _precedence). Because the strongest task always
+        # reaches a slot first, whoever holds a slot already outranks any later
+        # arrival -- so add_task never has to evict a task it already placed.
         occurrences: list[Task] = []
         for task in self.owner.all_tasks():
             occurrences.extend(self._expand_occurrences(task, self.owner.end_of_day))
-        occurrences.sort(
-            key=lambda t: (-PRIORITY_RANK.get(t.priority, 0), t.scheduled_time),
-        )
+        occurrences.sort(key=self._precedence)
         for occ in occurrences:
             self.add_task(occ, self.owner.end_of_day)
-        return self.daily_schedule
+        return self.get_schedule()
 
     def get_schedule(self) -> list[Task]:
-        """The organized timeline: tasks sorted by start time (across pets)."""
-        return [self.daily_schedule[k] for k in sorted(self.daily_schedule)]
+        """The organized timeline: tasks by start time (already sorted)."""
+        return list(self.placed)
 
     def tasks_for_pet(self, pet: Pet) -> list[Task]:
         """Scheduled tasks belonging to one pet (organizing the shared timeline)."""
-        return [t for t in self.get_schedule() if t.pet_assigned is pet]
+        return [t for t in self.placed if t.pet_assigned is pet]
+
+    # --- sorting & filtering utilities ----------------------------------
+    def sort_by_time(self, tasks: Optional[list[Task]] = None) -> list[Task]:
+        """Return tasks sorted by their ``scheduled_time`` (ascending).
+
+        Defaults to every task across the owner's pets; pass a list to sort a
+        specific subset (e.g. the current schedule or a filtered view).
+        """
+        tasks = self.owner.all_tasks() if tasks is None else list(tasks)
+        return sorted(tasks, key=lambda t: t.scheduled_time)
+
+    def filter_tasks(
+        self,
+        tasks: Optional[list[Task]] = None,
+        *,
+        completed: Optional[bool] = None,
+        pet_name: Optional[str] = None,
+    ) -> list[Task]:
+        """Return tasks filtered by completion status and/or pet name.
+
+        Both filters are optional and combine with AND; leaving one as ``None``
+        skips it. Defaults to every task across the owner's pets. Non-mutating.
+        """
+        tasks = self.owner.all_tasks() if tasks is None else list(tasks)
+        result = tasks
+        if completed is not None:
+            result = [t for t in result if t.completed == completed]
+        if pet_name is not None:
+            result = [
+                t for t in result
+                if t.pet_assigned is not None and t.pet_assigned.name == pet_name
+            ]
+        return result
 
     # --- core scheduling logic ------------------------------------------
+    #
+    # Placement is a plain greedy pass: build_daily_schedule sorts every
+    # occurrence by _precedence and adds them one at a time. Precedence puts the
+    # strongest task first, so whoever reaches a slot keeps it and add_task only
+    # has to place the *new* task -- fit it as-is, drop it (skippable), or nudge
+    # it to the next free time. No eviction or re-placement to reason about.
+
+    @staticmethod
+    def _precedence(task: Task) -> tuple[bool, int, time]:
+        """Placement order (ascending): the task placed first wins its slot.
+
+        Non-skippable before skippable, then higher priority, then earlier
+        requested time. Placing in this order is the whole conflict policy --
+        it makes a later arrival always the one that yields.
+        """
+        return (task.skippable, -task.rank, task.scheduled_time)
+
     def conflict_check(self, task: Task) -> Optional[Task]:
-        """Detector: return an already-scheduled task whose time interval
-        overlaps ``task``, or None if the slot range is free.
+        """Return an already-scheduled task whose interval overlaps ``task``,
+        or None if the slot range is free.
         """
-        start = _as_dt(task.scheduled_time)
-        end = start + timedelta(minutes=max(task.duration, 0))
-        for other in self.daily_schedule.values():
-            if other is task:
-                continue
-            o_start = _as_dt(other.scheduled_time)
-            o_end = o_start + timedelta(minutes=max(other.duration, 0))
-            if start < o_end and o_start < end:      # intervals overlap
-                return other
-        return None
-
-    def resolve_conflict(self, new_task: Task, existing: Task) -> Task:
-        """Decider: return the "loser" that must leave the slot.
-
-        1. A skippable task yields to a non-skippable one.
-        2. Otherwise the lower-priority task loses.
-        3. On a tie, first-come-stays: the existing task keeps the slot.
-        """
-        if new_task.skippable != existing.skippable:
-            return new_task if new_task.skippable else existing
-
-        rank_new = PRIORITY_RANK.get(new_task.priority, 0)
-        rank_existing = PRIORITY_RANK.get(existing.priority, 0)
-        if rank_new > rank_existing:
-            return existing
-        if rank_existing > rank_new:
-            return new_task
-        return new_task  # tie -> existing stays
+        overlaps = self._overlapping(task)
+        return overlaps[0] if overlaps else None
 
     def add_task(self, task: Task, end_of_day: time) -> bool:
-        """Entry point / orchestrator. Try to place ``task``.
+        """Place ``task`` on the timeline.
 
-        Returns True if ``task`` ended up on the schedule (possibly nudged to a
-        later slot), False if it could not be placed before ``end_of_day`` or
-        was intentionally skipped.
+        Returns True if it landed on the schedule (at its requested time or
+        nudged later), False if it was dropped (skippable) or could not fit
+        before ``end_of_day``.
         """
-        # 1. Bounds check (also stops the recursion from running past midnight).
         if task.scheduled_time > end_of_day:
             self._record_unplaced(task, "past end_of_day")
             return False
 
-        # 2. Free slot?
-        existing = self.conflict_check(task)
-        if existing is None:
-            self.daily_schedule[task.scheduled_time] = task
+        # Requested slot is free -> place it as-is.
+        conflicts = self._overlapping(task)
+        if not conflicts:
+            self._insert(task)
             return True
 
-        # 3. Conflict -> decide who leaves the slot.
-        loser = self.resolve_conflict(task, existing)
-
-        if loser is existing:
-            # New task wins: remove the existing task, then place the new one
-            # (re-checking against any OTHER overlaps via recursion).
-            del self.daily_schedule[existing.scheduled_time]
-            placed = self.add_task(task, end_of_day)
-            self._reschedule_loser(existing, winner=task, end_of_day=end_of_day)
-            return placed
-
-        # task itself is the loser.
+        # Conflict: a later arrival always yields (precedence placed the
+        # stronger task first). Skippable tasks are dropped outright.
         if task.skippable:
+            self._record_conflict(task, conflicts, "dropped (skippable)")
             self._record_skipped(task)
             return False
-        return self._reschedule_loser(task, winner=existing, end_of_day=end_of_day)
+
+        # Otherwise slide it to the earliest free slot at/after its time.
+        slot = self._earliest_free_slot(
+            _as_dt(task.scheduled_time), task.duration, end_of_day
+        )
+        if slot is None:
+            self._record_unplaced(task, "no free slot before end_of_day")
+            return False
+        self._record_conflict(task, conflicts, f"moved to {slot.strftime('%H:%M')}")
+        task.scheduled_time = slot
+        self._insert(task)
+        return True
 
     # --- helpers ---------------------------------------------------------
-    def _reschedule_loser(self, loser: Task, winner: Task, end_of_day: time) -> bool:
-        """Move ``loser`` to just after ``winner`` ends and re-add it.
+    def _earliest_free_slot(
+        self, not_before: datetime, duration: int, end_of_day: time
+    ) -> Optional[time]:
+        """Earliest start >= ``not_before`` where a ``duration``-minute task
+        fits with no overlap and starts at/before ``end_of_day``.
 
-        Skippable losers are dropped (logged) rather than nudged.
+        One left-to-right sweep over the sorted ``placed`` intervals. Returns a
+        ``time``, or None if no gap exists before the cutoff (or it would cross
+        midnight).
         """
-        if loser.skippable:
-            self._record_skipped(loser)
-            return False
-
-        nudged = self._nudge_after(winner)
-        if nudged is None:                      # rolled past midnight
-            self._record_unplaced(loser, "nudged past midnight")
-            return False
-        loser.scheduled_time = nudged
-        return self.add_task(loser, end_of_day)
-
-    def _nudge_after(self, winner: Task) -> Optional[time]:
-        """The first free start time after ``winner`` ends.
-
-        Advances by at least 1 minute so a zero-duration winner can't cause an
-        infinite loop. Returns None if the new time rolls past midnight.
-        """
-        minutes = max(winner.duration, 1)
-        new_dt = _as_dt(winner.scheduled_time) + timedelta(minutes=minutes)
-        if new_dt.date() != _REF_DATE:          # crossed midnight
+        dur = timedelta(minutes=max(duration, 0))
+        cutoff = _as_dt(end_of_day)
+        candidate = not_before
+        for placed in self.placed:
+            p_start = _as_dt(placed.scheduled_time)
+            p_end = p_start + timedelta(minutes=max(placed.duration, 0))
+            if p_end <= candidate:
+                continue                    # sits entirely before the gap
+            if p_start - candidate >= dur:
+                break                       # room before this task -> done
+            candidate = p_end               # push past the blocker
+        if candidate > cutoff or candidate.date() != _REF_DATE:
             return None
-        return new_dt.time()
+        return candidate.time()
+
+    # --- sorted-list bookkeeping ----------------------------------------
+    def _overlapping(self, task: Task) -> list[Task]:
+        """Every placed task whose interval overlaps ``task``'s interval.
+
+        Because ``placed`` is sorted and non-overlapping, only the neighbour
+        just before the insertion point and the run of tasks starting before
+        ``task`` ends can overlap -- found via a bisect rather than a full scan.
+        """
+        start = _as_dt(task.scheduled_time)
+        end = start + timedelta(minutes=max(task.duration, 0))
+        i = bisect.bisect_left(
+            self.placed, task.scheduled_time, key=lambda t: t.scheduled_time
+        )
+
+        overlaps: list[Task] = []
+        # Left neighbour: only it can reach across the insertion point.
+        if i > 0:
+            left = self.placed[i - 1]
+            left_end = _as_dt(left.scheduled_time) + timedelta(
+                minutes=max(left.duration, 0)
+            )
+            if left_end > start:
+                overlaps.append(left)
+        # Rightward run: every task that starts before ``task`` ends overlaps.
+        k = i
+        while k < len(self.placed):
+            right = self.placed[k]
+            if _as_dt(right.scheduled_time) < end:
+                overlaps.append(right)
+                k += 1
+            else:
+                break
+        return overlaps
+
+    def _insert(self, task: Task) -> None:
+        """Insert ``task`` into the sorted ``placed`` list at its start time."""
+        i = bisect.bisect_left(
+            self.placed, task.scheduled_time, key=lambda t: t.scheduled_time
+        )
+        self.placed.insert(i, task)
 
     def _expand_occurrences(self, task: Task, end_of_day: time) -> list[Task]:
         """Turn one task into ``frequency`` concrete occurrences for the day.
 
         Occurrences are copies (the pet keeps the original as its declared
         intent), spread evenly across the window from the task's start time to
-        end_of_day. A frequency of 1 (or no room to spread) yields a single
-        copy at the original time.
+        end_of_day -- the first at the start time, the last at end_of_day. A
+        frequency of 1 (or no room to spread) yields a single copy at the
+        original time.
         """
         freq = max(task.frequency, 1)
         if freq == 1:
@@ -328,7 +442,7 @@ class Scheduler:
         if window_minutes <= 0:
             return [replace(task)]
 
-        step = window_minutes / freq
+        step = window_minutes / (freq - 1)
         occurrences = []
         for i in range(freq):
             slot = (start + timedelta(minutes=step * i)).time()
@@ -339,6 +453,23 @@ class Scheduler:
                 description=f"{task.description} ({i + 1}/{freq})",
             ))
         return occurrences
+
+    def _record_conflict(
+        self, task: Task, conflicts: list[Task], outcome: str
+    ) -> None:
+        """Warn that ``task`` overlapped already-scheduled task(s), and note the
+        outcome (``task`` always yields -- it is moved or dropped).
+        """
+        others = ", ".join(
+            f"'{c.description}' @ {c.scheduled_time.strftime('%H:%M')}"
+            for c in conflicts
+        )
+        msg = (
+            f"'{task.description}' @ {task.scheduled_time.strftime('%H:%M')} "
+            f"overlaps {others} -> {outcome}"
+        )
+        self.conflicts.append(msg)
+        print(f"[conflict] {msg}")
 
     def _record_skipped(self, task: Task) -> None:
         """Log a skippable task that was dropped because it lost its slot."""

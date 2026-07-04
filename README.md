@@ -80,14 +80,12 @@ Sample test output:
 
 ## 📐 Smarter Scheduling
 
-> Fill in once you've implemented scheduling logic.
-
 | Feature | Method(s) | Notes |
 |---------|-----------|-------|
-| Task sorting | | e.g., by priority, duration |
-| Filtering | | e.g., skip tasks if time runs out |
-| Conflict handling | | e.g., overlapping time slots |
-| Recurring tasks | | e.g., daily vs. weekly |
+| Task sorting | `sort_by_time()`<br>`build_daily_schedule()` | `sort_by_time()` orders tasks by time. Scheduling places tasks in precedence order (non-skippable, then priority, then time) regardless of insertion order. |
+| Filtering | `filter_tasks(completed=..., pet_name=...)` | Filter by completion status and/or pet name (combine with AND). Non-mutating. |
+| Conflict handling | `add_task()`<br>`conflict_check()`<br>`Scheduler.conflicts` | Detects overlapping time slots across all pets. The lower-priority task is nudged to the next free slot, or dropped if `skippable`. Tradeoff: priority over punctuality. |
+| Recurring tasks | `Task.mark_complete()`<br>`Task.spawn_next_occurrence()` | `recurrence` of `daily`/`weekly` auto-creates the next occurrence on completion. Separate from `frequency` (repeats within one day). |
 
 ## 📸 Demo Walkthrough
 
