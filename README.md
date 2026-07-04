@@ -64,9 +64,12 @@ Today's Schedule for Sally Weeks:
 
 ## 🧪 Testing PawPal+
 
+### Description:
+Tests are designed to test several functions to ensure the "Happy Path" as well as for edge cases are still handled correctly. Specifically they cover: completion (tasks that are completed are marked as so), task-to-pet linkage (tasks added to a pet increase the task list links accordingly), sorting (task sorting handled accordingly), recurrence (after recurring tasks completes, the next occurrence is automatically added to the schedule), conflict detection and the empty-owner (Owner but no pet attached yet) edge case.
+
 ```bash
 # Run the full test suite:
-pytest
+python -m pytest
 
 # Run with coverage:
 pytest --cov
@@ -75,8 +78,20 @@ pytest --cov
 Sample test output:
 
 ```
-# Paste your pytest output here
+===================================================================== test session starts ======================================================================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: /mnt/c/CodePath-AI/ai110-module2show-pawpal-starter
+plugins: anyio-4.14.1
+collected 6 items                                                                                                                                              
+
+tests/test_pawpal.py ......                                                                                                                              [100%]
+
+====================================================================== 6 passed in 0.35s =======================================================================
 ```
+
+### Confidence level (1 - 5 stars)
+🌟🌟🌟🌟 🌟 
+Edge cases and features implemented are tested for and all tests pass. 5 stars
 
 ## 📐 Smarter Scheduling
 
