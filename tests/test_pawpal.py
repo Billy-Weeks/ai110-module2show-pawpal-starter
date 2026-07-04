@@ -126,6 +126,112 @@ def test_empty_owner_schedule_is_empty():
     assert scheduler.unplaced == []
 
 
+def test_skippable_task_is_dropped_on_conflict():
+    """A skippable task that overlaps another task should never take a slot:
+    it lands in the scheduler's ``skipped`` list, not on the timeline."""
+    owner = Owner("Sam", "Lee", end_of_day=time(20, 0))
+    pet = Pet("Rex", "dog", "Corgi", 3, "kibble", "high")
+    owner.add_pet(pet)
+
+    # A non-skippable feeding owns 09:00-09:30.
+    feeding = Task("Feeding", time(9, 0), duration=30, priority="high")
+    # A skippable walk wants the same slot -> it must yield and be dropped.
+    walk = Task("Walk", time(9, 0), duration=30, skippable=True, priority="low")
+    pet.add_task(feeding)
+    pet.add_task(walk)
+
+    scheduler = Scheduler(owner)
+    scheduler.build_daily_schedule()
+    scheduled = scheduler.get_schedule()
+
+    # Feeding keeps its slot; the skippable walk is dropped, not nudged.
+    assert feeding in scheduled
+    assert walk not in scheduled
+    assert walk in scheduler.skipped
+
+
+def test_suggest_free_time_returns_nudged_slot():
+    """When a non-skippable task clashes, suggest_free_time() should return the
+    earliest conflict-free time -- the slot the user is prompted to accept."""
+    owner = Owner("Sam", "Lee", end_of_day=time(20, 0))
+    pet = Pet("Rex", "dog", "Corgi", 3, "kibble", "high")
+    owner.add_pet(pet)
+
+    # Existing task occupies 09:00-09:30.
+    pet.add_task(Task("Feeding", time(9, 0), duration=30, priority="high"))
+
+    # A new non-skippable task wants 09:00 -> should be nudged to 09:30.
+    new_task = Task("Vet call", time(9, 0), duration=20, priority="high")
+    suggested = Scheduler(owner).suggest_free_time(new_task)
+
+    assert suggested == time(9, 30)
+
+
+def test_suggest_free_time_returns_none_when_no_slot_fits():
+    """If nothing fits before the owner's end-of-day cutoff, suggest_free_time()
+    should return None -- the UI then refuses to add the task."""
+    # Cutoff is 09:20, but the only existing task blocks until 09:30.
+    owner = Owner("Sam", "Lee", end_of_day=time(9, 20))
+    pet = Pet("Rex", "dog", "Corgi", 3, "kibble", "high")
+    owner.add_pet(pet)
+
+    pet.add_task(Task("Feeding", time(9, 0), duration=30, priority="high"))
+
+    new_task = Task("Vet call", time(9, 0), duration=10, priority="high")
+    suggested = Scheduler(owner).suggest_free_time(new_task)
+
+    # No free start time at/before 09:20 -> nothing to suggest.
+    assert suggested is None
+
+
+def test_declining_suggested_time_does_not_add_task():
+    """If the user declines the suggested time, the task must NOT be added.
+
+    Checking for conflicts and computing a suggestion are both non-mutating, so
+    when the UI skips the accept step nothing is ever attached to the pet.
+    """
+    owner = Owner("Sam", "Lee", end_of_day=time(20, 0))
+    pet = Pet("Rex", "dog", "Corgi", 3, "kibble", "high")
+    owner.add_pet(pet)
+    pet.add_task(Task("Feeding", time(9, 0), duration=30, priority="high"))
+
+    tasks_before = len(pet.tasks)
+
+    # Mirror the app's pre-add flow: detect the clash and get a suggestion...
+    new_task = Task("Vet call", time(9, 0), duration=20, priority="high")
+    clashes = Scheduler(owner).find_conflicts(new_task, owner.all_tasks())
+    suggested = Scheduler(owner).suggest_free_time(new_task)
+    assert clashes                 # there IS a conflict to prompt about
+    assert suggested is not None   # and a time was offered
+
+    # ...but the user declines: add_task is never called. Nothing changed.
+    assert len(pet.tasks) == tasks_before
+    assert new_task not in pet.tasks
+    assert new_task not in owner.all_tasks()
+    assert new_task.pet_assigned is None
+
+
+def test_accepting_suggested_time_adds_task_conflict_free():
+    """If the user accepts the suggested time, the task is added at that time
+    and no longer conflicts with anything."""
+    owner = Owner("Sam", "Lee", end_of_day=time(20, 0))
+    pet = Pet("Rex", "dog", "Corgi", 3, "kibble", "high")
+    owner.add_pet(pet)
+    pet.add_task(Task("Feeding", time(9, 0), duration=30, priority="high"))
+
+    new_task = Task("Vet call", time(9, 0), duration=20, priority="high")
+    suggested = Scheduler(owner).suggest_free_time(new_task)
+
+    # Mirror the app's accept branch: move the task and add it.
+    new_task.scheduled_time = suggested
+    pet.add_task(new_task)
+
+    # It's now attached at the accepted time and clashes with nothing.
+    assert new_task in pet.tasks
+    assert new_task.scheduled_time == time(9, 30)
+    assert Scheduler(owner).find_conflicts(new_task, owner.all_tasks()) == []
+
+
 if __name__ == "__main__":
     test_mark_complete_changes_status()
     print("PASS: mark_complete() changes the task's status")
@@ -144,5 +250,20 @@ if __name__ == "__main__":
 
     test_empty_owner_schedule_is_empty()
     print("PASS: an empty owner builds an empty schedule")
+
+    test_skippable_task_is_dropped_on_conflict()
+    print("PASS: a skippable task is dropped (not nudged) on conflict")
+
+    test_suggest_free_time_returns_nudged_slot()
+    print("PASS: suggest_free_time() returns the nudged slot to prompt with")
+
+    test_suggest_free_time_returns_none_when_no_slot_fits()
+    print("PASS: suggest_free_time() returns None when nothing fits")
+
+    test_declining_suggested_time_does_not_add_task()
+    print("PASS: declining the suggested time does not add the task")
+
+    test_accepting_suggested_time_adds_task_conflict_free()
+    print("PASS: accepting the suggested time adds the task conflict-free")
 
     print("\nAll tests passed.")

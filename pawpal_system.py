@@ -338,6 +338,24 @@ class Scheduler:
                 hits.append(other)
         return hits
 
+    def suggest_free_time(self, task: Task) -> Optional[time]:
+        """Earliest conflict-free start time at or after ``task``'s requested
+        time, given the owner's other tasks -- or None if nothing fits before
+        the owner's end-of-day cutoff.
+
+        Reuses the same greedy sweep the scheduler uses to nudge a displaced
+        task, so the suggestion matches what a build would do. Rebuilds this
+        scheduler's timeline from the owner's tasks, so call it on a fresh
+        ``Scheduler`` (as the UI does).
+        """
+        self.placed = sorted(
+            (t for t in self.owner.all_tasks() if t is not task),
+            key=lambda t: t.scheduled_time,
+        )
+        return self._earliest_free_slot(
+            _as_dt(task.scheduled_time), task.duration, self.owner.end_of_day
+        )
+
     def add_task(self, task: Task, end_of_day: time) -> bool:
         """Place ``task`` on the timeline.
 

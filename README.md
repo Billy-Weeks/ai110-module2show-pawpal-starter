@@ -82,16 +82,17 @@ Sample test output:
 platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0
 rootdir: /mnt/c/CodePath-AI/ai110-module2show-pawpal-starter
 plugins: anyio-4.14.1
-collected 6 items                                                                                                                                              
+collected 11 items                                                                                                                                             
 
-tests/test_pawpal.py ......                                                                                                                              [100%]
+tests/test_pawpal.py ...........                                                                                                                         [100%]
 
-====================================================================== 6 passed in 0.35s =======================================================================
+====================================================================== 11 passed in 0.46s ======================================================================
 ```
 
 ### Confidence level (1 - 5 stars)
 🌟🌟🌟🌟 🌟 
-Edge cases and features implemented are tested for and all tests pass. 5 stars
+
+Edge cases and features implemented are tested for and all tests pass. 5 stars!
 
 ## 📐 Smarter Scheduling
 
