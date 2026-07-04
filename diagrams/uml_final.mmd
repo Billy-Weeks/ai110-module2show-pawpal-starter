@@ -1,0 +1,78 @@
+classDiagram
+    class Pet {
+        +String name
+        +String pet_type
+        +String breed
+        +int age
+        +String diet
+        +String energy_level
+        +List~String~ medicines
+        +List~Task~ tasks
+        +List~String~ meal_log
+        +List~String~ exercise_log
+        +List~String~ medicine_log
+        +add_task(Task task)
+        +remove_task(Task task)
+        +list_tasks() List~Task~
+        +pending_tasks() List~Task~
+        +log_meal(String note)
+        +log_exercise(String note)
+        +log_medicine(String note)
+        +update_name(String name)
+        +add_medicine(String medicine)
+        +remove_medicine(String medicine)
+        +update_diet(String diet)
+        +update_energy_level(String level)
+    }
+
+    class Owner {
+        +String first
+        +String last
+        +Time end_of_day
+        +List~Pet~ pet_list
+        +add_pet(Pet pet)
+        +remove_pet(Pet pet)
+        +update_first(String first)
+        +update_last(String last)
+        +all_tasks() List~Task~
+    }
+
+    class Task {
+        +String description
+        +Time scheduled_time
+        +int duration
+        +int frequency
+        +bool skippable
+        +String priority
+        +String recurrence
+        +Date due_date
+        +bool completed
+        +Pet pet_assigned
+        +rank() int
+        +mark_complete() Task
+        +spawn_next_occurrence() Task
+        +change_description(String description)
+        +update_duration(int duration)
+    }
+
+    class Scheduler {
+        +Owner owner
+        +List~Task~ placed
+        +List~Task~ skipped
+        +List~Task~ unplaced
+        +List~String~ conflicts
+        +build_daily_schedule() List~Task~
+        +get_schedule() List~Task~
+        +tasks_for_pet(Pet pet) List~Task~
+        +sort_by_time(List~Task~ tasks) List~Task~
+        +filter_tasks(List~Task~ tasks, bool completed, String pet_name) List~Task~
+        +find_conflicts(Task task, List~Task~ among) List~Task~
+        +suggest_free_time(Task task) Time
+        +add_task(Task task, Time end_of_day) bool
+    }
+
+    Owner "1" o-- "*" Pet : owns
+    Pet "1" o-- "*" Task : has
+    Task "*" --> "1" Pet : assigned to
+    Scheduler "1" --> "1" Owner : manages tasks for
+    Scheduler ..> Task : places / skips
